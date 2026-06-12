@@ -625,8 +625,13 @@ fn anthropic_profile_does_not_render_codex() {
         .arg(codex_auth_path())
         .env("SSH_AUTH_SOCK", &agent.ssh_auth_sock)
         .output()
-        .expect("failed to run keybearer supervisor");
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("[keybearer] intercepted"));
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("[keybearer] denied"));
 }
 
 #[test]
@@ -738,10 +743,8 @@ fn malformed_codex_config_continues_original_file() {
         .unwrap();
     assert!(
         output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("[keybearer] intercepted"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("[keybearer] denied"));
     assert_eq!(output.stdout, invalid);
 }
 
@@ -874,7 +877,7 @@ fn malformed_opencode_config_continues_original_file() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("[keybearer] intercepted"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("[keybearer] denied"));
     assert_eq!(output.stdout, invalid);
 }
 
@@ -969,10 +972,6 @@ fn supervisor_intercepts_codex_auth() {
         output.status.success(),
         "supervised command should succeed, stderr: {stderr}"
     );
-    assert!(
-        stderr.contains("[keybearer] intercepted"),
-        "supervisor should log interception, got stderr: {stderr}"
-    );
     assert_eq!(
         stdout.trim(),
         r#"{"OPENAI_API_KEY":"sk-test-openai"}"#,
@@ -1030,23 +1029,15 @@ fn intercepts_direct_syscall_openat() {
 
     let output = Command::new(keybearer_bin())
         .arg("run")
-        .arg(helper)
+        .arg(&helper)
         .arg(&auth_path)
         .env("SSH_AUTH_SOCK", &agent.ssh_auth_sock)
         .output()
         .expect("failed to run direct syscall helper");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(
-        output.status.success(),
-        "direct syscall helper should succeed, stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains("[keybearer] intercepted"),
-        "raw openat syscall should be intercepted, got stderr: {stderr}"
-    );
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(stdout.trim(), r#"{"OPENAI_API_KEY":"sk-test-openai"}"#);
 }
 

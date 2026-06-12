@@ -1135,7 +1135,9 @@ fn handle_notification(notify_fd: RawFd, req: &libc::seccomp_notif) -> io::Resul
             else {
                 return continue_syscall(notify_fd, req.id);
             };
-            eprintln!("[keybearer] intercepted {path}");
+            if env::var_os("KEYBEARER_DEBUG").is_some() {
+                eprintln!("[keybearer] intercepted {path}");
+            }
             let file = memfd_with_contents("keybearer-config", &contents)?;
             inject_fd(notify_fd, req.id, file.as_raw_fd())?;
             Ok(())
