@@ -1,5 +1,5 @@
 use crate::credentials::CredentialResponse;
-use crate::model::AppType;
+use crate::model::{AppType, ProviderKind};
 use serde_json::{Map, Value, json};
 use toml_edit::{DocumentMut, Item, Table, value};
 
@@ -98,7 +98,7 @@ fn merge_codex_config(
     doc["model_reasoning_effort"] = value(reasoning_effort);
     doc["disable_response_storage"] = value(credential.disable_response_storage.unwrap_or(true));
 
-    if !doc["model_providers"].is_table() {
+    if doc.get("model_providers").map_or(true, |v| !v.is_table()) {
         doc["model_providers"] = Item::Table(Table::new());
     }
     let provider_table = doc["model_providers"].as_table_mut()?;
@@ -134,22 +134,32 @@ fn merge_opencode_config(
         object.insert("provider".to_string(), Value::Object(Map::new()));
     }
 
-    let base_url = credential.base_url.as_ref()?;
-    let model = credential.model.as_deref().unwrap_or("gpt-4o");
+    let npm = match credential.provider_kind {
+        ProviderKind::Anthropic => "@ai-sdk/anthropic",
+        ProviderKind::OpenAI => "@ai-sdk/openai",
+        ProviderKind::OpenAICompatible => "@ai-sdk/openai-compatible",
+    };
+
+    let mut options = Map::new();
+    if let Some(base_url) = &credential.base_url {
+        options.insert("baseURL".to_string(), Value::String(base_url.clone()));
+    }
+    options.insert("apiKey".to_string(), Value::String(credential.api_key.clone()));
+
+    let mut models = Map::new();
+    for m in &credential.models {
+        models.insert(m.clone(), json!({ "name": m }));
+    }
+
     let provider_id = format!("keybearer-{}", credential.profile_id);
     let provider = object.get_mut("provider")?.as_object_mut()?;
     provider.insert(
         provider_id,
         json!({
-            "npm": "@ai-sdk/openai-compatible",
+            "npm": npm,
             "name": credential.profile_name,
-            "options": {
-                "baseURL": base_url,
-                "apiKey": credential.api_key,
-            },
-            "models": {
-                model: { "name": model }
-            }
+            "options": options,
+            "models": models,
         }),
     );
 
@@ -165,11 +175,8 @@ fn merge_claude_code_config(
         None => json!({}),
     };
     let object = root.as_object_mut()?;
-    let env = object
-        .entry("env")
-        .or_insert_with(|| Value::Object(Map::new()))
-        .as_object_mut()?;
 
+    let mut env = Map::new();
     env.insert(
         "ANTHROPIC_AUTH_TOKEN".to_string(),
         Value::String(credential.api_key.clone()),
@@ -186,7 +193,17 @@ fn merge_claude_code_config(
             Value::String(model.clone()),
         );
     }
+    if let Some(m) = &credential.haiku_model {
+        env.insert("ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(), Value::String(m.clone()));
+    }
+    if let Some(m) = &credential.sonnet_model {
+        env.insert("ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(), Value::String(m.clone()));
+    }
+    if let Some(m) = &credential.opus_model {
+        env.insert("ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(), Value::String(m.clone()));
+    }
 
+    object.insert("env".to_string(), Value::Object(env));
     serde_json::to_vec(&root).ok()
 }
 

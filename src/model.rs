@@ -1,4 +1,3 @@
-use serde::Deserialize;
 use std::collections::BTreeMap;
 
 #[derive(
@@ -129,13 +128,8 @@ impl From<ProviderApps> for Vec<AppType> {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
 pub struct CodexModelConfig {
-    #[serde(
-        default,
-        alias = "model",
-        deserialize_with = "deserialize_models",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub models: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(rename = "reasoningEffort", skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
     #[serde(
@@ -147,24 +141,20 @@ pub struct CodexModelConfig {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
 pub struct OpenCodeModelConfig {
-    #[serde(
-        default,
-        alias = "model",
-        deserialize_with = "deserialize_models",
-        skip_serializing_if = "Vec::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
 pub struct ClaudeCodeModelConfig {
-    #[serde(
-        default,
-        alias = "model",
-        deserialize_with = "deserialize_models",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub models: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(rename = "haikuModel", skip_serializing_if = "Option::is_none")]
+    pub haiku_model: Option<String>,
+    #[serde(rename = "sonnetModel", skip_serializing_if = "Option::is_none")]
+    pub sonnet_model: Option<String>,
+    #[serde(rename = "opusModel", skip_serializing_if = "Option::is_none")]
+    pub opus_model: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
@@ -216,18 +206,3 @@ pub struct KeybearerStore {
     pub defaults: BTreeMap<AppType, String>,
 }
 
-fn deserialize_models<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<String>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum OneOrMany {
-        One(String),
-        Many(Vec<String>),
-    }
-    match Option::<OneOrMany>::deserialize(deserializer)? {
-        None => Ok(Vec::new()),
-        Some(OneOrMany::One(s)) => Ok(vec![s]),
-        Some(OneOrMany::Many(v)) => Ok(v),
-    }
-}

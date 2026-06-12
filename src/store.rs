@@ -80,7 +80,7 @@ pub fn validate_store(store: &KeybearerStore) -> io::Result<()> {
         if profile.api_key.is_empty() {
             return invalid_config(format!("profile {profile_id} apiKey must not be empty"));
         }
-        if !profile.apps.codex && !profile.apps.open_code {
+        if !profile.apps.codex && !profile.apps.open_code && !profile.apps.claude_code {
             return invalid_config(format!("profile {profile_id} must enable at least one app"));
         }
         if matches!(profile.provider_kind, ProviderKind::OpenAICompatible)

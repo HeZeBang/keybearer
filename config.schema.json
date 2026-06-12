@@ -106,8 +106,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "models": {
-          "$ref": "#/$defs/stringList"
+        "model": {
+          "type": "string",
+          "minLength": 1
         },
         "reasoningEffort": {
           "enum": [
@@ -130,26 +131,6 @@
       "additionalProperties": false,
       "properties": {
         "models": {
-          "$ref": "#/$defs/stringList"
-        }
-      }
-    },
-    "claudeCodeModels": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "models": {
-          "$ref": "#/$defs/stringList"
-        }
-      }
-    },
-    "stringList": {
-      "oneOf": [
-        {
-          "type": "string",
-          "minLength": 1
-        },
-        {
           "type": "array",
           "minItems": 1,
           "items": {
@@ -157,7 +138,29 @@
             "minLength": 1
           }
         }
-      ]
+      }
+    },
+    "claudeCodeModels": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "haikuModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sonnetModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "opusModel": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     }
   }
 }

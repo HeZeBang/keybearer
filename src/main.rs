@@ -106,7 +106,7 @@ fn main() {
 fn dispatch() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     let Some(command) = args.get(1).map(String::as_str) else {
-        eprintln!("Usage: keybearer <agent|add|list|remove|use|check|ssh|run> ...");
+        eprintln!("Usage: keybearer <agent|add|list|remove|use|check|ssh|run|dry-run> ...");
         std::process::exit(EXIT_USAGE);
     };
 
@@ -119,8 +119,9 @@ fn dispatch() -> io::Result<()> {
         "check" => check_command(&args[2..]),
         "ssh" => ssh_command(&args[2..]),
         "run" => run_command(&args[2..]),
+        "dry-run" => dry_run_command(&args[2..]),
         _ => {
-            eprintln!("Usage: keybearer <agent|add|list|remove|use|check|ssh|run> ...");
+            eprintln!("Usage: keybearer <agent|add|list|remove|use|check|ssh|run|dry-run> ...");
             std::process::exit(EXIT_USAGE);
         }
     }
@@ -593,6 +594,88 @@ fn check_command(args: &[String]) -> io::Result<()> {
     }
 }
 
+fn dry_run_command(args: &[String]) -> io::Result<()> {
+    if args.is_empty() || args.len() > 2 {
+        eprintln!("Usage: keybearer dry-run <app> [profile-id]");
+        std::process::exit(EXIT_USAGE);
+    }
+    let app = AppType::parse(&args[0]).unwrap_or_else(|| {
+        eprintln!("keybearer: unknown app: {}", args[0]);
+        std::process::exit(EXIT_USAGE);
+    });
+    let profile_id = args.get(1).map(String::as_str);
+    let store = store::load_store()?;
+    let credential = credentials::credential_for_app(&store, app, profile_id).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "no credential resolved for {} (profile: {})",
+                app.as_str(),
+                profile_id.unwrap_or("<default>")
+            ),
+        )
+    })?;
+
+    let configs: &[(&str, templates::AppConfig)] = match app {
+        AppType::Codex => &[
+            (
+                "~/.codex/auth.json",
+                templates::AppConfig {
+                    virtual_path: "codex/auth.json",
+                    app: AppType::Codex,
+                    mode: templates::AppConfigMode::Replace,
+                },
+            ),
+            (
+                "~/.codex/config.toml",
+                templates::AppConfig {
+                    virtual_path: "codex/config.toml",
+                    app: AppType::Codex,
+                    mode: templates::AppConfigMode::Merge,
+                },
+            ),
+        ],
+        AppType::OpenCode => &[(
+            "~/.config/opencode/opencode.json",
+            templates::AppConfig {
+                virtual_path: "opencode/opencode.json",
+                app: AppType::OpenCode,
+                mode: templates::AppConfigMode::Merge,
+            },
+        )],
+        AppType::ClaudeCode => &[(
+            "~/.claude/settings.json",
+            templates::AppConfig {
+                virtual_path: "claude/settings.json",
+                app: AppType::ClaudeCode,
+                mode: templates::AppConfigMode::Merge,
+            },
+        )],
+    };
+
+    for (display_path, config) in configs {
+        let rendered = templates::render_app_config(config, &credential, None);
+        println!("── {} ──", display_path);
+        match rendered {
+            Some(bytes) => {
+                let text = String::from_utf8_lossy(&bytes);
+                if display_path.ends_with(".json") {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_else(|_| text.into_owned()));
+                    } else {
+                        print!("{text}");
+                    }
+                } else {
+                    print!("{text}");
+                }
+            }
+            None => println!("(not rendered)"),
+        }
+        println!();
+    }
+    Ok(())
+}
+
 fn parse_add_profile(args: &[String]) -> io::Result<(String, ProviderProfile)> {
     let provider_kind = ProviderKind::parse(&args[0]).unwrap_or_else(|| {
         eprintln!("keybearer: unsupported provider kind: {}", args[0]);
@@ -665,7 +748,7 @@ fn parse_add_profile(args: &[String]) -> io::Result<(String, ProviderProfile)> {
     if !model_list.is_empty() {
         if apps.codex {
             models.codex = Some(CodexModelConfig {
-                models: model_list.clone(),
+                model: model_list.first().cloned(),
                 reasoning_effort: None,
                 disable_response_storage: None,
             });
@@ -677,7 +760,10 @@ fn parse_add_profile(args: &[String]) -> io::Result<(String, ProviderProfile)> {
         }
         if apps.claude_code {
             models.claude_code = Some(ClaudeCodeModelConfig {
-                models: model_list.clone(),
+                model: model_list.first().cloned(),
+                haiku_model: None,
+                sonnet_model: None,
+                opus_model: None,
             });
         }
         if !apps.codex && !apps.open_code && !apps.claude_code {
@@ -737,7 +823,7 @@ fn profile_from_agent_payload(
     if !model_list.is_empty() {
         if apps.codex {
             models.codex = Some(CodexModelConfig {
-                models: model_list.clone(),
+                model: model_list.first().cloned(),
                 reasoning_effort: None,
                 disable_response_storage: None,
             });
@@ -749,7 +835,10 @@ fn profile_from_agent_payload(
         }
         if apps.claude_code {
             models.claude_code = Some(ClaudeCodeModelConfig {
-                models: model_list.clone(),
+                model: model_list.first().cloned(),
+                haiku_model: None,
+                sonnet_model: None,
+                opus_model: None,
             });
         }
     }
@@ -787,23 +876,20 @@ fn send_agent_profile(
         .models
         .codex
         .as_ref()
-        .filter(|c| !c.models.is_empty())
-        .map(|c| c.models.join(","))
+        .and_then(|c| c.model.clone())
         .or_else(|| {
             profile
                 .models
                 .open_code
                 .as_ref()
-                .filter(|c| !c.models.is_empty())
-                .map(|c| c.models.join(","))
+                .and_then(|c| c.models.first().cloned())
         })
         .or_else(|| {
             profile
                 .models
                 .claude_code
                 .as_ref()
-                .filter(|c| !c.models.is_empty())
-                .map(|c| c.models.join(","))
+                .and_then(|c| c.model.clone())
         })
         .unwrap_or_default();
     body.extend(encode_string(model_csv.as_bytes()));

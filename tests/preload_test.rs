@@ -185,7 +185,7 @@ fn top_level_usage_exits_64() {
 
     assert_eq!(output.status.code(), Some(64));
     assert!(
-        stderr.contains("Usage: keybearer <agent|add|list|remove|use|check|ssh|run> ..."),
+        stderr.contains("Usage: keybearer <agent|add|list|remove|use|check|ssh|run|dry-run> ..."),
         "unexpected stderr: {stderr}"
     );
 }
@@ -884,7 +884,7 @@ fn get_credential_returns_profile_json_for_app() {
     assert_eq!(json["profileId"], "work");
     assert_eq!(json["providerKind"], "openai");
     assert_eq!(json["apiKey"], "sk-test-openai");
-    assert_eq!(json["model"], "gpt-4o");
+    assert_eq!(json["model"], "gpt-5.5");
 }
 
 #[test]
