@@ -217,4 +217,23 @@ mod tests {
         assert_eq!(config.app, AppType::Codex);
         assert_eq!(config.mode, AppConfigMode::Merge);
     }
+
+    #[test]
+    fn app_config_matches_bare_suffix() {
+        let config = app_config_for_path(".claude/settings.json").unwrap();
+        assert_eq!(config.app, AppType::ClaudeCode);
+    }
+
+    #[test]
+    fn app_config_matches_dot_slash_prefix() {
+        let config = app_config_for_path("./.codex/auth.json").unwrap();
+        assert_eq!(config.app, AppType::Codex);
+        assert_eq!(config.mode, AppConfigMode::Replace);
+    }
+
+    #[test]
+    fn app_config_rejects_partial_suffix() {
+        assert!(app_config_for_path("settings.json").is_none());
+        assert!(app_config_for_path("evil.claude/settings.json").is_none());
+    }
 }
