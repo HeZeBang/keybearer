@@ -1,6 +1,6 @@
 use crate::model::{AppType, KeybearerStore, ProviderKind, ProviderProfile};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialResponse {
     pub schema_version: u32,
@@ -17,8 +17,8 @@ pub struct CredentialResponse {
     pub reasoning_effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_response_storage: Option<bool>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub models: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_config: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub haiku_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,6 +53,9 @@ fn credential_for_codex(
     resolved_id: &str,
     profile: &ProviderProfile,
 ) -> Option<CredentialResponse> {
+    if !AppType::Codex.supports_provider(&profile.provider_kind) {
+        return None;
+    }
     let base_url = match profile.provider_kind {
         ProviderKind::OpenAI => Some(
             profile
@@ -61,9 +64,9 @@ fn credential_for_codex(
                 .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
         ),
         ProviderKind::OpenAICompatible => Some(profile.base_url.clone()?),
-        ProviderKind::Anthropic => return None,
+        ProviderKind::Anthropic => unreachable!(),
     };
-    let codex_config = profile.models.codex.as_ref();
+    let codex_config = profile.app_config.codex.as_ref();
     let model = codex_config
         .and_then(|c| c.model.clone())
         .unwrap_or_else(|| "gpt-5.5".to_string());
@@ -86,7 +89,7 @@ fn credential_for_codex(
                 .and_then(|c| c.disable_response_storage)
                 .unwrap_or(true),
         ),
-        models: Vec::new(),
+        provider_config: None,
         haiku_model: None,
         sonnet_model: None,
         opus_model: None,
@@ -97,8 +100,12 @@ fn credential_for_opencode(
     resolved_id: &str,
     profile: &ProviderProfile,
 ) -> Option<CredentialResponse> {
-    let oc = profile.models.open_code.as_ref();
-    let models = oc.map(|c| c.models.clone()).unwrap_or_default();
+    let provider_config = profile
+        .app_config
+        .open_code
+        .as_ref()
+        .map(|c| c.0.clone())
+        .filter(|v| !v.is_null());
     Some(CredentialResponse {
         schema_version: CREDENTIAL_SCHEMA_VERSION,
         app: AppType::OpenCode,
@@ -110,7 +117,7 @@ fn credential_for_opencode(
         model: None,
         reasoning_effort: None,
         disable_response_storage: None,
-        models,
+        provider_config,
         haiku_model: None,
         sonnet_model: None,
         opus_model: None,
@@ -121,7 +128,10 @@ fn credential_for_claude_code(
     resolved_id: &str,
     profile: &ProviderProfile,
 ) -> Option<CredentialResponse> {
-    let cc = profile.models.claude_code.as_ref();
+    if !AppType::ClaudeCode.supports_provider(&profile.provider_kind) {
+        return None;
+    }
+    let cc = profile.app_config.claude_code.as_ref();
     Some(CredentialResponse {
         schema_version: CREDENTIAL_SCHEMA_VERSION,
         app: AppType::ClaudeCode,
@@ -133,7 +143,7 @@ fn credential_for_claude_code(
         model: cc.and_then(|c| c.model.clone()),
         reasoning_effort: None,
         disable_response_storage: None,
-        models: Vec::new(),
+        provider_config: None,
         haiku_model: cc.and_then(|c| c.haiku_model.clone()),
         sonnet_model: cc.and_then(|c| c.sonnet_model.clone()),
         opus_model: cc.and_then(|c| c.opus_model.clone()),

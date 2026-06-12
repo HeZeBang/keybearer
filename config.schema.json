@@ -82,7 +82,7 @@
             ]
           }
         },
-        "models": {
+        "appConfig": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -100,7 +100,75 @@
         "meta": {
           "type": "object"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "providerKind": {
+                "const": "anthropic"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "apps": {
+                "items": {
+                  "enum": [
+                    "opencode",
+                    "claudeCode"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "providerKind": {
+                "enum": [
+                  "openai",
+                  "openai-compatible"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "apps": {
+                "items": {
+                  "enum": [
+                    "codex",
+                    "opencode"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "providerKind": {
+                "const": "openai"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "apps": {
+                "items": {
+                  "enum": [
+                    "codex",
+                    "opencode"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "codexModels": {
       "type": "object",
@@ -127,15 +195,172 @@
       }
     },
     "opencodeModels": {
+      "description": "OpenCode ProviderConfig passthrough. See https://opencode.ai/config.json",
       "type": "object",
-      "additionalProperties": false,
       "properties": {
+        "npm": {
+          "type": "string"
+        },
+        "api": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "options": {
+          "type": "object",
+          "properties": {
+            "apiKey": {
+              "type": "string"
+            },
+            "baseURL": {
+              "type": "string"
+            },
+            "setCacheKey": {
+              "type": "boolean"
+            },
+            "timeout": {
+              "type": "integer"
+            },
+            "headerTimeout": {
+              "type": "integer"
+            },
+            "chunkTimeout": {
+              "type": "integer"
+            }
+          }
+        },
         "models": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "family": {
+                "type": "string"
+              },
+              "attachment": {
+                "type": "boolean"
+              },
+              "reasoning": {
+                "type": "boolean"
+              },
+              "temperature": {
+                "type": "boolean"
+              },
+              "tool_call": {
+                "type": "boolean"
+              },
+              "experimental": {
+                "type": "boolean"
+              },
+              "status": {
+                "enum": [
+                  "alpha",
+                  "beta",
+                  "deprecated",
+                  "active"
+                ]
+              },
+              "cost": {
+                "type": "object",
+                "properties": {
+                  "input": {
+                    "type": "number"
+                  },
+                  "output": {
+                    "type": "number"
+                  },
+                  "cache_read": {
+                    "type": "number"
+                  },
+                  "cache_write": {
+                    "type": "number"
+                  }
+                }
+              },
+              "limit": {
+                "type": "object",
+                "properties": {
+                  "context": {
+                    "type": "number"
+                  },
+                  "input": {
+                    "type": "number"
+                  },
+                  "output": {
+                    "type": "number"
+                  }
+                }
+              },
+              "modalities": {
+                "type": "object",
+                "properties": {
+                  "input": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "text",
+                        "audio",
+                        "image",
+                        "video",
+                        "pdf"
+                      ]
+                    }
+                  },
+                  "output": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "text",
+                        "audio",
+                        "image",
+                        "video",
+                        "pdf"
+                      ]
+                    }
+                  }
+                }
+              },
+              "variants": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object"
+                }
+              },
+              "options": {
+                "type": "object"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "whitelist": {
           "type": "array",
-          "minItems": 1,
           "items": {
-            "type": "string",
-            "minLength": 1
+            "type": "string"
+          }
+        },
+        "blacklist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "string"
           }
         }
       }

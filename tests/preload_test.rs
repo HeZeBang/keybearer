@@ -207,6 +207,7 @@ fn run_usage_exits_64() {
 
 #[test]
 fn agent_preserves_upstream_ssh_agent() {
+    let config_dir = temp_config_dir();
     let upstream_path = std::env::temp_dir().join(format!(
         "keybearer-upstream-{}-{}.sock",
         std::process::id(),
@@ -224,6 +225,7 @@ fn agent_preserves_upstream_ssh_agent() {
     let output = Command::new(keybearer_bin())
         .arg("agent")
         .env("SSH_AUTH_SOCK", &upstream_path)
+        .env("KEYBEARER_CONFIG_DIR", &config_dir)
         .output()
         .expect("failed to start keybearer agent");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -256,6 +258,7 @@ fn agent_preserves_upstream_ssh_agent() {
 
 #[test]
 fn agent_reeval_preserves_original_upstream_ssh_agent() {
+    let config_dir = temp_config_dir();
     let upstream_path = std::env::temp_dir().join(format!(
         "keybearer-upstream-reeval-{}-{}.sock",
         std::process::id(),
@@ -271,6 +274,7 @@ fn agent_reeval_preserves_original_upstream_ssh_agent() {
     let first = Command::new(keybearer_bin())
         .arg("agent")
         .env("SSH_AUTH_SOCK", &upstream_path)
+        .env("KEYBEARER_CONFIG_DIR", &config_dir)
         .output()
         .expect("failed to start first keybearer agent");
     assert!(
@@ -289,6 +293,7 @@ fn agent_reeval_preserves_original_upstream_ssh_agent() {
         .arg("agent")
         .env("SSH_AUTH_SOCK", &first_sock)
         .env("KEYBEARER_UPSTREAM_SSH_AUTH_SOCK", &exported_upstream)
+        .env("KEYBEARER_CONFIG_DIR", &config_dir)
         .output()
         .expect("failed to start second keybearer agent");
     assert!(
@@ -612,7 +617,8 @@ fn store_roundtrips_provider_without_printing_key() {
 #[test]
 fn anthropic_profile_does_not_render_codex() {
     let agent = TestAgent::start();
-    agent.add_provider("anthropic", "sk-ant-test");
+    agent.add_profile("anthropic", "anthropic", "sk-ant-test", &["--app", "claudeCode"]);
+    agent.use_profile("claudeCode", "anthropic");
     let output = Command::new(keybearer_bin())
         .arg("run")
         .arg("cat")

@@ -83,6 +83,15 @@ pub fn validate_store(store: &KeybearerStore) -> io::Result<()> {
         if !profile.apps.codex && !profile.apps.open_code && !profile.apps.claude_code {
             return invalid_config(format!("profile {profile_id} must enable at least one app"));
         }
+        for app in enabled_apps(profile) {
+            if !app.supports_provider(&profile.provider_kind) {
+                return invalid_config(format!(
+                    "profile {profile_id}: {} does not support {} provider",
+                    app.as_str(),
+                    profile.provider_kind.as_str()
+                ));
+            }
+        }
         if matches!(profile.provider_kind, ProviderKind::OpenAICompatible)
             && (profile.apps.codex || profile.apps.open_code)
             && profile.base_url.as_deref().unwrap_or_default().is_empty()
@@ -131,6 +140,20 @@ pub fn empty_store() -> KeybearerStore {
         profiles: BTreeMap::new(),
         defaults: BTreeMap::new(),
     }
+}
+
+fn enabled_apps(profile: &ProviderProfile) -> Vec<AppType> {
+    let mut apps = Vec::new();
+    if profile.apps.codex {
+        apps.push(AppType::Codex);
+    }
+    if profile.apps.open_code {
+        apps.push(AppType::OpenCode);
+    }
+    if profile.apps.claude_code {
+        apps.push(AppType::ClaudeCode);
+    }
+    apps
 }
 
 fn valid_profile_id(id: &str) -> bool {

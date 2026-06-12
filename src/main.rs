@@ -5,7 +5,7 @@ mod templates;
 
 use crate::model::{
     AppType, ClaudeCodeModelConfig, CodexModelConfig, OpenCodeModelConfig, ProviderApps,
-    ProviderKind, ProviderModels,
+    ProviderAppConfig, ProviderKind,
     ProviderProfile,
 };
 use libc::{self, c_int, c_ulong};
@@ -744,22 +744,26 @@ fn parse_add_profile(args: &[String]) -> io::Result<(String, ProviderProfile)> {
     {
         apps.codex = true;
     }
-    let mut models = ProviderModels::default();
+    let mut app_config = ProviderAppConfig::default();
     if !model_list.is_empty() {
         if apps.codex {
-            models.codex = Some(CodexModelConfig {
+            app_config.codex = Some(CodexModelConfig {
                 model: model_list.first().cloned(),
                 reasoning_effort: None,
                 disable_response_storage: None,
             });
         }
         if apps.open_code {
-            models.open_code = Some(OpenCodeModelConfig {
-                models: model_list.clone(),
-            });
+            let mut oc_models = serde_json::Map::new();
+            for m in &model_list {
+                oc_models.insert(m.clone(), serde_json::json!({ "name": m }));
+            }
+            app_config.open_code = Some(OpenCodeModelConfig(
+                serde_json::json!({ "models": oc_models }),
+            ));
         }
         if apps.claude_code {
-            models.claude_code = Some(ClaudeCodeModelConfig {
+            app_config.claude_code = Some(ClaudeCodeModelConfig {
                 model: model_list.first().cloned(),
                 haiku_model: None,
                 sonnet_model: None,
@@ -778,7 +782,7 @@ fn parse_add_profile(args: &[String]) -> io::Result<(String, ProviderProfile)> {
             apps,
             base_url,
             api_key,
-            models,
+            app_config,
             meta: Default::default(),
         },
     ))
@@ -819,22 +823,26 @@ fn profile_from_agent_payload(
             None => return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid app")),
         }
     }
-    let mut models = ProviderModels::default();
+    let mut app_config = ProviderAppConfig::default();
     if !model_list.is_empty() {
         if apps.codex {
-            models.codex = Some(CodexModelConfig {
+            app_config.codex = Some(CodexModelConfig {
                 model: model_list.first().cloned(),
                 reasoning_effort: None,
                 disable_response_storage: None,
             });
         }
         if apps.open_code {
-            models.open_code = Some(OpenCodeModelConfig {
-                models: model_list.clone(),
-            });
+            let mut oc_models = serde_json::Map::new();
+            for m in &model_list {
+                oc_models.insert(m.clone(), serde_json::json!({ "name": m }));
+            }
+            app_config.open_code = Some(OpenCodeModelConfig(
+                serde_json::json!({ "models": oc_models }),
+            ));
         }
         if apps.claude_code {
-            models.claude_code = Some(ClaudeCodeModelConfig {
+            app_config.claude_code = Some(ClaudeCodeModelConfig {
                 model: model_list.first().cloned(),
                 haiku_model: None,
                 sonnet_model: None,
@@ -850,7 +858,7 @@ fn profile_from_agent_payload(
             apps,
             base_url,
             api_key,
-            models,
+            app_config,
             meta: Default::default(),
         },
     ))
@@ -873,20 +881,22 @@ fn send_agent_profile(
     ));
     body.extend(encode_string(profile.apps.csv().as_bytes()));
     let model_csv = profile
-        .models
+        .app_config
         .codex
         .as_ref()
         .and_then(|c| c.model.clone())
         .or_else(|| {
             profile
-                .models
+                .app_config
                 .open_code
                 .as_ref()
-                .and_then(|c| c.models.first().cloned())
+                .and_then(|c| c.0.get("models"))
+                .and_then(|m| m.as_object())
+                .and_then(|m| m.keys().next().cloned())
         })
         .or_else(|| {
             profile
-                .models
+                .app_config
                 .claude_code
                 .as_ref()
                 .and_then(|c| c.model.clone())

@@ -29,6 +29,14 @@ impl AppType {
             _ => None,
         }
     }
+
+    pub fn supports_provider(&self, provider: &ProviderKind) -> bool {
+        match self {
+            Self::Codex => matches!(provider, ProviderKind::OpenAI | ProviderKind::OpenAICompatible),
+            Self::ClaudeCode => matches!(provider, ProviderKind::Anthropic),
+            Self::OpenCode => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -139,11 +147,14 @@ pub struct CodexModelConfig {
     pub disable_response_storage: Option<bool>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
-pub struct OpenCodeModelConfig {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub models: Vec<String>,
-}
+/// Transparent passthrough for the OpenCode ProviderConfig schema.
+/// See https://opencode.ai/config.json — fields like `models`, `options`,
+/// `npm`, `api`, `whitelist`, `blacklist` etc. are passed through as-is.
+/// At render time keybearer injects `npm`, `name`, `options.apiKey`,
+/// `options.baseURL` from the profile-level fields.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq)]
+#[serde(transparent)]
+pub struct OpenCodeModelConfig(pub serde_json::Value);
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
 pub struct ClaudeCodeModelConfig {
@@ -157,8 +168,8 @@ pub struct ClaudeCodeModelConfig {
     pub opus_model: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
-pub struct ProviderModels {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq)]
+pub struct ProviderAppConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex: Option<CodexModelConfig>,
     #[serde(rename = "opencode", skip_serializing_if = "Option::is_none")]
@@ -179,7 +190,7 @@ pub struct ProviderMeta {
     pub sort_index: Option<usize>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ProviderProfile {
     pub name: String,
     #[serde(rename = "providerKind")]
@@ -190,13 +201,13 @@ pub struct ProviderProfile {
     pub base_url: Option<String>,
     #[serde(rename = "apiKey")]
     pub api_key: String,
-    #[serde(default)]
-    pub models: ProviderModels,
+    #[serde(default, rename = "appConfig")]
+    pub app_config: ProviderAppConfig,
     #[serde(default)]
     pub meta: ProviderMeta,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct KeybearerStore {
     #[serde(rename = "schemaVersion")]
     pub schema_version: u32,

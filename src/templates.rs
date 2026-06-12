@@ -74,8 +74,7 @@ fn matches_path(path: &str, home: Option<&std::path::PathBuf>, suffix: &str) -> 
             return true;
         }
     }
-    let suffix = format!("/{suffix}");
-    path.ends_with(&suffix)
+    path.ends_with(&format!("/{suffix}")) || path == suffix
 }
 
 fn merge_codex_config(
@@ -134,34 +133,33 @@ fn merge_opencode_config(
         object.insert("provider".to_string(), Value::Object(Map::new()));
     }
 
+    let mut entry = credential
+        .provider_config
+        .clone()
+        .and_then(|v| if v.is_object() { Some(v) } else { None })
+        .unwrap_or_else(|| json!({}));
+    let obj = entry.as_object_mut()?;
+
     let npm = match credential.provider_kind {
         ProviderKind::Anthropic => "@ai-sdk/anthropic",
         ProviderKind::OpenAI => "@ai-sdk/openai",
         ProviderKind::OpenAICompatible => "@ai-sdk/openai-compatible",
     };
+    obj.entry("npm").or_insert_with(|| Value::String(npm.to_string()));
+    obj.insert("name".to_string(), Value::String(credential.profile_name.clone()));
 
-    let mut options = Map::new();
-    if let Some(base_url) = &credential.base_url {
-        options.insert("baseURL".to_string(), Value::String(base_url.clone()));
-    }
+    let options = obj
+        .entry("options")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()?;
     options.insert("apiKey".to_string(), Value::String(credential.api_key.clone()));
-
-    let mut models = Map::new();
-    for m in &credential.models {
-        models.insert(m.clone(), json!({ "name": m }));
+    if let Some(base_url) = &credential.base_url {
+        options.entry("baseURL").or_insert_with(|| Value::String(base_url.clone()));
     }
 
     let provider_id = format!("keybearer-{}", credential.profile_id);
     let provider = object.get_mut("provider")?.as_object_mut()?;
-    provider.insert(
-        provider_id,
-        json!({
-            "npm": npm,
-            "name": credential.profile_name,
-            "options": options,
-            "models": models,
-        }),
-    );
+    provider.insert(provider_id, entry);
 
     serde_json::to_vec(&root).ok()
 }
