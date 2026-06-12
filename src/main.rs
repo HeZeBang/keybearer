@@ -4,9 +4,8 @@ mod store;
 mod templates;
 
 use crate::model::{
-    AppType, ClaudeCodeModelConfig, CodexModelConfig, OpenCodeModelConfig, ProviderApps,
-    ProviderAppConfig, ProviderKind,
-    ProviderProfile,
+    AppType, ClaudeCodeModelConfig, CodexModelConfig, OpenCodeModelConfig, ProviderAppConfig,
+    ProviderApps, ProviderKind, ProviderProfile,
 };
 use libc::{self, c_int, c_ulong};
 use nix::sys::socket::{
@@ -16,6 +15,7 @@ use nix::sys::socket::{
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{ForkResult, Pid, execvp, fork};
 use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::env;
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
@@ -643,14 +643,24 @@ fn dry_run_command(args: &[String]) -> io::Result<()> {
                 mode: templates::AppConfigMode::Merge,
             },
         )],
-        AppType::ClaudeCode => &[(
-            "~/.claude/settings.json",
-            templates::AppConfig {
-                virtual_path: "claude/settings.json",
-                app: AppType::ClaudeCode,
-                mode: templates::AppConfigMode::Merge,
-            },
-        )],
+        AppType::ClaudeCode => &[
+            (
+                "~/.claude/settings.json",
+                templates::AppConfig {
+                    virtual_path: "claude/settings.json",
+                    app: AppType::ClaudeCode,
+                    mode: templates::AppConfigMode::Merge,
+                },
+            ),
+            (
+                "~/.claude/config.json",
+                templates::AppConfig {
+                    virtual_path: "claude/config.json",
+                    app: AppType::ClaudeCode,
+                    mode: templates::AppConfigMode::Merge,
+                },
+            ),
+        ],
     };
 
     for (display_path, config) in configs {
@@ -661,7 +671,10 @@ fn dry_run_command(args: &[String]) -> io::Result<()> {
                 let text = String::from_utf8_lossy(&bytes);
                 if display_path.ends_with(".json") {
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_else(|_| text.into_owned()));
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&v).unwrap_or_else(|_| text.into_owned())
+                        );
                     } else {
                         print!("{text}");
                     }
@@ -1049,7 +1062,14 @@ fn install_seccomp_filter(debug_reads: bool) -> io::Result<OwnedFd> {
 fn seccomp_filter(debug_reads: bool) -> Vec<libc::sock_filter> {
     let arch_offset = offset_of!(libc::seccomp_data, arch) as u32;
     let nr_offset = offset_of!(libc::seccomp_data, nr) as u32;
-    let mut trapped = vec![libc::SYS_open, libc::SYS_openat, libc::SYS_openat2];
+    let mut trapped = vec![
+        libc::SYS_open,
+        libc::SYS_openat,
+        libc::SYS_openat2,
+        libc::SYS_readlink,
+        libc::SYS_readlinkat,
+        libc::SYS_inotify_add_watch,
+    ];
 
     if debug_reads {
         trapped.extend([
@@ -1080,7 +1100,9 @@ fn seccomp_filter(debug_reads: bool) -> Vec<libc::sock_filter> {
     filter.push(stmt(BPF_RET | BPF_K, libc::SECCOMP_RET_USER_NOTIF));
     filter
 }
+
 fn supervise(notify_fd: RawFd) -> io::Result<()> {
+    let mut virtual_fds = HashMap::new();
     loop {
         let mut req: libc::seccomp_notif = unsafe { zeroed() };
         let recv = unsafe { libc::ioctl(notify_fd, SECCOMP_IOCTL_NOTIF_RECV, &mut req) };
@@ -1095,7 +1117,7 @@ fn supervise(notify_fd: RawFd) -> io::Result<()> {
             return Err(error);
         }
 
-        if let Err(error) = handle_notification(notify_fd, &req) {
+        if let Err(error) = handle_notification(notify_fd, &req, &mut virtual_fds) {
             let mut resp: libc::seccomp_notif_resp = unsafe { zeroed() };
             resp.id = req.id;
             resp.error = -error.raw_os_error().unwrap_or(libc::EIO);
@@ -1104,10 +1126,18 @@ fn supervise(notify_fd: RawFd) -> io::Result<()> {
     }
 }
 
-fn handle_notification(notify_fd: RawFd, req: &libc::seccomp_notif) -> io::Result<()> {
+fn handle_notification(
+    notify_fd: RawFd,
+    req: &libc::seccomp_notif,
+    virtual_fds: &mut HashMap<(u32, i32), String>,
+) -> io::Result<()> {
     if is_read_family_syscall(req.data.nr) {
         debug_log(&format_read_debug(req));
         return continue_syscall(notify_fd, req.id);
+    }
+
+    if is_readlink_syscall(req.data.nr) {
+        return handle_readlink_notification(notify_fd, req, virtual_fds);
     }
 
     let Some(path_ptr) = pathname_arg(req) else {
@@ -1123,6 +1153,11 @@ fn handle_notification(notify_fd: RawFd, req: &libc::seccomp_notif) -> io::Resul
     let Some(config) = templates::app_config_for_path(&path) else {
         return continue_syscall(notify_fd, req.id);
     };
+
+    if req.data.nr as i64 == libc::SYS_inotify_add_watch as i64 {
+        return handle_virtual_inotify_watch(notify_fd, req, &path, config.app);
+    }
+
     let remote_base = match config.mode {
         templates::AppConfigMode::Replace => None,
         templates::AppConfigMode::Merge => read_remote_base(&path)?,
@@ -1139,7 +1174,8 @@ fn handle_notification(notify_fd: RawFd, req: &libc::seccomp_notif) -> io::Resul
                 eprintln!("[keybearer] intercepted {path}");
             }
             let file = memfd_with_contents("keybearer-config", &contents)?;
-            inject_fd(notify_fd, req.id, file.as_raw_fd())?;
+            let child_fd = inject_fd(notify_fd, req.id, file.as_raw_fd())?;
+            virtual_fds.insert((req.pid, child_fd), path);
             Ok(())
         }
         CredentialReply::NotFound => continue_syscall(notify_fd, req.id),
@@ -1156,10 +1192,98 @@ fn pathname_arg(req: &libc::seccomp_notif) -> Option<u64> {
         x if x == libc::SYS_openat as i64 || x == libc::SYS_openat2 as i64 => {
             Some(req.data.args[1])
         }
+        x if x == libc::SYS_inotify_add_watch as i64 => Some(req.data.args[1]),
         _ => None,
     }
 }
 
+fn handle_readlink_notification(
+    notify_fd: RawFd,
+    req: &libc::seccomp_notif,
+    virtual_fds: &HashMap<(u32, i32), String>,
+) -> io::Result<()> {
+    let Some(path_ptr) = readlink_path_arg(req) else {
+        return continue_syscall(notify_fd, req.id);
+    };
+    let path = read_child_c_string(req.pid, path_ptr)?;
+    debug_log(&format!(
+        "[keybearer:debug] {}: {path}",
+        syscall_name(req.data.nr)
+    ));
+    let Some(fd) = proc_fd_path_fd(&path, req.pid) else {
+        return continue_syscall(notify_fd, req.id);
+    };
+    let Some(virtual_path) = virtual_fds.get(&(req.pid, fd)) else {
+        return continue_syscall(notify_fd, req.id);
+    };
+    let Some(buf_ptr) = readlink_buf_arg(req) else {
+        return continue_syscall(notify_fd, req.id);
+    };
+    let bufsiz = readlink_bufsiz_arg(req) as usize;
+    let bytes = virtual_path.as_bytes();
+    let len = bytes.len().min(bufsiz);
+    write_child_memory(req.pid, buf_ptr, &bytes[..len])?;
+    return_syscall_value(notify_fd, req.id, len as i64)
+}
+
+fn readlink_path_arg(req: &libc::seccomp_notif) -> Option<u64> {
+    match req.data.nr as i64 {
+        x if x == libc::SYS_readlink as i64 => Some(req.data.args[0]),
+        x if x == libc::SYS_readlinkat as i64 => Some(req.data.args[1]),
+        _ => None,
+    }
+}
+
+fn readlink_buf_arg(req: &libc::seccomp_notif) -> Option<u64> {
+    match req.data.nr as i64 {
+        x if x == libc::SYS_readlink as i64 => Some(req.data.args[1]),
+        x if x == libc::SYS_readlinkat as i64 => Some(req.data.args[2]),
+        _ => None,
+    }
+}
+
+fn readlink_bufsiz_arg(req: &libc::seccomp_notif) -> u64 {
+    match req.data.nr as i64 {
+        x if x == libc::SYS_readlink as i64 => req.data.args[2],
+        x if x == libc::SYS_readlinkat as i64 => req.data.args[3],
+        _ => 0,
+    }
+}
+
+fn proc_fd_path_fd(path: &str, pid: u32) -> Option<i32> {
+    path.strip_prefix("/proc/self/fd/")
+        .or_else(|| path.strip_prefix(&format!("/proc/{pid}/fd/")))?
+        .parse()
+        .ok()
+}
+
+fn is_readlink_syscall(number: c_int) -> bool {
+    matches!(
+        number as i64,
+        x if x == libc::SYS_readlink as i64 || x == libc::SYS_readlinkat as i64
+    )
+}
+
+fn handle_virtual_inotify_watch(
+    notify_fd: RawFd,
+    req: &libc::seccomp_notif,
+    path: &str,
+    app: AppType,
+) -> io::Result<()> {
+    match request_credential(app)? {
+        CredentialReply::Found(_) => {
+            if env::var_os("KEYBEARER_DEBUG").is_some() {
+                eprintln!("[keybearer] intercepted inotify watch {path}");
+            }
+            return_syscall_value(notify_fd, req.id, 1)
+        }
+        CredentialReply::NotFound => continue_syscall(notify_fd, req.id),
+        CredentialReply::Denied => {
+            eprintln!("keybearer: denied virtual credential for {path}");
+            Err(io::Error::from_raw_os_error(libc::EACCES))
+        }
+    }
+}
 fn is_read_family_syscall(number: c_int) -> bool {
     matches!(
         number as i64,
@@ -1199,6 +1323,9 @@ fn syscall_name(number: c_int) -> &'static str {
         x if x == libc::SYS_open as i64 => "open",
         x if x == libc::SYS_openat as i64 => "openat",
         x if x == libc::SYS_openat2 as i64 => "openat2",
+        x if x == libc::SYS_readlink as i64 => "readlink",
+        x if x == libc::SYS_readlinkat as i64 => "readlinkat",
+        x if x == libc::SYS_inotify_add_watch as i64 => "inotify_add_watch",
         x if x == libc::SYS_read as i64 => "read",
         x if x == libc::SYS_pread64 as i64 => "pread64",
         x if x == libc::SYS_readv as i64 => "readv",
@@ -1455,7 +1582,13 @@ fn memfd_with_contents(name: &str, contents: &[u8]) -> io::Result<File> {
     Ok(file)
 }
 
-fn inject_fd(notify_fd: RawFd, id: u64, source_fd: RawFd) -> io::Result<()> {
+fn write_child_memory(pid: u32, address: u64, bytes: &[u8]) -> io::Result<()> {
+    let mem_path = format!("/proc/{pid}/mem");
+    let mem = OpenOptions::new().write(true).open(mem_path)?;
+    std::os::unix::fs::FileExt::write_all_at(&mem, bytes, address)
+}
+
+fn inject_fd(notify_fd: RawFd, id: u64, source_fd: RawFd) -> io::Result<i32> {
     let mut addfd = libc::seccomp_notif_addfd {
         id,
         flags: libc::SECCOMP_ADDFD_FLAG_SEND as u32,
@@ -1463,8 +1596,7 @@ fn inject_fd(notify_fd: RawFd, id: u64, source_fd: RawFd) -> io::Result<()> {
         newfd: 0,
         newfd_flags: libc::O_CLOEXEC as u32,
     };
-    syscall_check(unsafe { libc::ioctl(notify_fd, SECCOMP_IOCTL_NOTIF_ADDFD, &mut addfd) })?;
-    Ok(())
+    syscall_check(unsafe { libc::ioctl(notify_fd, SECCOMP_IOCTL_NOTIF_ADDFD, &mut addfd) })
 }
 
 fn continue_syscall(notify_fd: RawFd, id: u64) -> io::Result<()> {
@@ -1474,6 +1606,12 @@ fn continue_syscall(notify_fd: RawFd, id: u64) -> io::Result<()> {
     send_response(notify_fd, &mut resp)
 }
 
+fn return_syscall_value(notify_fd: RawFd, id: u64, value: i64) -> io::Result<()> {
+    let mut resp: libc::seccomp_notif_resp = unsafe { zeroed() };
+    resp.id = id;
+    resp.val = value;
+    send_response(notify_fd, &mut resp)
+}
 fn send_response(notify_fd: RawFd, resp: &mut libc::seccomp_notif_resp) -> io::Result<()> {
     syscall_check(unsafe { libc::ioctl(notify_fd, SECCOMP_IOCTL_NOTIF_SEND, resp) })?;
     Ok(())

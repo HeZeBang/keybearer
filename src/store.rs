@@ -5,7 +5,8 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 pub const STORE_SCHEMA_VERSION: u32 = 1;
-pub const CONFIG_SCHEMA_URL: &str = "https://raw.githubusercontent.com/HeZeBang/keybearer/refs/heads/master/config.schema.json";
+pub const CONFIG_SCHEMA_URL: &str =
+    "https://raw.githubusercontent.com/HeZeBang/keybearer/refs/heads/master/config.schema.json";
 
 pub fn config_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("KEYBEARER_CONFIG_DIR") {
@@ -45,7 +46,10 @@ pub fn save_store(store: &KeybearerStore) -> io::Result<()> {
     let path = store_path();
     let tmp = config_dir().join("config.yaml.tmp");
     let yaml = serde_yaml::to_string(store).map_err(invalid_data)?;
-    let yaml = format!("# yaml-language-server: $schema={}\n{}", CONFIG_SCHEMA_URL, yaml);
+    let yaml = format!(
+        "# yaml-language-server: $schema={}\n{}",
+        CONFIG_SCHEMA_URL, yaml
+    );
 
     {
         let mut file = OpenOptions::new()

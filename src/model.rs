@@ -32,7 +32,10 @@ impl AppType {
 
     pub fn supports_provider(&self, provider: &ProviderKind) -> bool {
         match self {
-            Self::Codex => matches!(provider, ProviderKind::OpenAI | ProviderKind::OpenAICompatible),
+            Self::Codex => matches!(
+                provider,
+                ProviderKind::OpenAI | ProviderKind::OpenAICompatible
+            ),
             Self::ClaudeCode => matches!(provider, ProviderKind::Anthropic),
             Self::OpenCode => true,
         }
@@ -216,4 +219,3 @@ pub struct KeybearerStore {
     #[serde(default)]
     pub defaults: BTreeMap<AppType, String>,
 }
-

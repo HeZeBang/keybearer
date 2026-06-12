@@ -46,6 +46,13 @@ pub fn app_config_for_path(path: &str) -> Option<AppConfig> {
             mode: AppConfigMode::Merge,
         });
     }
+    if matches_path(path, home.as_ref(), ".claude/config.json") {
+        return Some(AppConfig {
+            virtual_path: "claude/config.json",
+            app: AppType::ClaudeCode,
+            mode: AppConfigMode::Merge,
+        });
+    }
     None
 }
 
@@ -64,6 +71,7 @@ pub fn render_app_config(
         "codex/config.toml" => merge_codex_config(credential, remote_base),
         "opencode/opencode.json" => merge_opencode_config(credential, remote_base),
         "claude/settings.json" => merge_claude_code_config(credential, remote_base),
+        "claude/config.json" => merge_claude_api_billing_config(remote_base),
         _ => None,
     }
 }
@@ -145,16 +153,25 @@ fn merge_opencode_config(
         ProviderKind::OpenAI => "@ai-sdk/openai",
         ProviderKind::OpenAICompatible => "@ai-sdk/openai-compatible",
     };
-    obj.entry("npm").or_insert_with(|| Value::String(npm.to_string()));
-    obj.insert("name".to_string(), Value::String(credential.profile_name.clone()));
+    obj.entry("npm")
+        .or_insert_with(|| Value::String(npm.to_string()));
+    obj.insert(
+        "name".to_string(),
+        Value::String(credential.profile_name.clone()),
+    );
 
     let options = obj
         .entry("options")
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()?;
-    options.insert("apiKey".to_string(), Value::String(credential.api_key.clone()));
+    options.insert(
+        "apiKey".to_string(),
+        Value::String(credential.api_key.clone()),
+    );
     if let Some(base_url) = &credential.base_url {
-        options.entry("baseURL").or_insert_with(|| Value::String(base_url.clone()));
+        options
+            .entry("baseURL")
+            .or_insert_with(|| Value::String(base_url.clone()));
     }
 
     let provider_id = format!("keybearer-{}", credential.profile_id);
@@ -186,29 +203,49 @@ fn merge_claude_code_config(
         );
     }
     if let Some(model) = &credential.model {
-        env.insert(
-            "ANTHROPIC_MODEL".to_string(),
-            Value::String(model.clone()),
-        );
+        env.insert("ANTHROPIC_MODEL".to_string(), Value::String(model.clone()));
     }
     if let Some(m) = &credential.haiku_model {
-        env.insert("ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(), Value::String(m.clone()));
+        env.insert(
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(),
+            Value::String(m.clone()),
+        );
     }
     if let Some(m) = &credential.sonnet_model {
-        env.insert("ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(), Value::String(m.clone()));
+        env.insert(
+            "ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(),
+            Value::String(m.clone()),
+        );
     }
     if let Some(m) = &credential.opus_model {
-        env.insert("ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(), Value::String(m.clone()));
+        env.insert(
+            "ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(),
+            Value::String(m.clone()),
+        );
     }
 
     object.insert("env".to_string(), Value::Object(env));
     serde_json::to_vec(&root).ok()
 }
 
+fn merge_claude_api_billing_config(remote_base: Option<&[u8]>) -> Option<Vec<u8>> {
+    let mut root = match remote_base.filter(|bytes| !bytes.is_empty()) {
+        Some(bytes) => serde_json::from_slice::<Value>(bytes).ok()?,
+        None => json!({}),
+    };
+    let object = root.as_object_mut()?;
+    object.insert(
+        "primaryApiKey".to_string(),
+        Value::String("any".to_string()),
+    );
+    serde_json::to_vec(&root).ok()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AppConfigMode, app_config_for_path};
-    use crate::model::AppType;
+    use super::{AppConfigMode, app_config_for_path, render_app_config};
+    use crate::credentials::{CREDENTIAL_SCHEMA_VERSION, CredentialResponse};
+    use crate::model::{AppType, ProviderKind};
 
     #[test]
     fn app_config_matches_known_paths() {
@@ -220,8 +257,12 @@ mod tests {
 
     #[test]
     fn app_config_matches_bare_suffix() {
-        let config = app_config_for_path(".claude/settings.json").unwrap();
+        let settings = app_config_for_path(".claude/settings.json").unwrap();
+        assert_eq!(settings.app, AppType::ClaudeCode);
+        let config = app_config_for_path(".claude/config.json").unwrap();
+        assert_eq!(config.virtual_path, "claude/config.json");
         assert_eq!(config.app, AppType::ClaudeCode);
+        assert_eq!(config.mode, AppConfigMode::Merge);
     }
 
     #[test]
@@ -232,8 +273,41 @@ mod tests {
     }
 
     #[test]
+    fn claude_config_sets_primary_api_key_sentinel() {
+        let config = app_config_for_path(".claude/config.json").unwrap();
+        let credential = CredentialResponse {
+            schema_version: CREDENTIAL_SCHEMA_VERSION,
+            app: AppType::ClaudeCode,
+            profile_id: "cc".to_string(),
+            profile_name: "Claude".to_string(),
+            provider_kind: ProviderKind::Anthropic,
+            base_url: None,
+            api_key: "sk-secret".to_string(),
+            model: None,
+            reasoning_effort: None,
+            disable_response_storage: None,
+            provider_config: None,
+            haiku_model: None,
+            sonnet_model: None,
+            opus_model: None,
+        };
+        let rendered = render_app_config(
+            &config,
+            &credential,
+            Some(br#"{"theme":"dark","primaryApiKey":"old"}"#),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&rendered).unwrap();
+
+        assert_eq!(value["primaryApiKey"], "any");
+        assert_eq!(value["theme"], "dark");
+        assert!(!String::from_utf8(rendered).unwrap().contains("sk-secret"));
+    }
+
+    #[test]
     fn app_config_rejects_partial_suffix() {
         assert!(app_config_for_path("settings.json").is_none());
         assert!(app_config_for_path("evil.claude/settings.json").is_none());
+        assert!(app_config_for_path("evil.claude/config.json").is_none());
     }
 }

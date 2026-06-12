@@ -617,7 +617,12 @@ fn store_roundtrips_provider_without_printing_key() {
 #[test]
 fn anthropic_profile_does_not_render_codex() {
     let agent = TestAgent::start();
-    agent.add_profile("anthropic", "anthropic", "sk-ant-test", &["--app", "claudeCode"]);
+    agent.add_profile(
+        "anthropic",
+        "anthropic",
+        "sk-ant-test",
+        &["--app", "claudeCode"],
+    );
     agent.use_profile("claudeCode", "anthropic");
     let output = Command::new(keybearer_bin())
         .arg("run")
@@ -632,6 +637,30 @@ fn anthropic_profile_does_not_render_codex() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(!String::from_utf8_lossy(&output.stderr).contains("[keybearer] denied"));
+}
+
+#[test]
+fn supervisor_injects_claude_primary_api_key_sentinel() {
+    let agent = TestAgent::start();
+    agent.add_profile("anthropic", "cc", "sk-ant-test", &["--app", "claudeCode"]);
+    agent.use_profile("claudeCode", "cc");
+    let config_path = temp_app_path(".claude/config.json");
+    std::fs::write(&config_path, br#"{"theme":"dark","primaryApiKey":"old"}"#).unwrap();
+
+    let output = Command::new(keybearer_bin())
+        .arg("run")
+        .arg("cat")
+        .arg(&config_path)
+        .env("SSH_AUTH_SOCK", &agent.ssh_auth_sock)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["primaryApiKey"], "any");
+    assert_eq!(value["theme"], "dark");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("sk-ant-test"));
 }
 
 #[test]
@@ -741,9 +770,7 @@ fn malformed_codex_config_continues_original_file() {
         .env("SSH_AUTH_SOCK", &agent.ssh_auth_sock)
         .output()
         .unwrap();
-    assert!(
-        output.status.success(),
-    );
+    assert!(output.status.success(),);
     assert!(!String::from_utf8_lossy(&output.stderr).contains("[keybearer] denied"));
     assert_eq!(output.stdout, invalid);
 }
@@ -1037,8 +1064,40 @@ fn intercepts_direct_syscall_openat() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(stdout.trim(), r#"{"OPENAI_API_KEY":"sk-test-openai"}"#);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn intercepts_direct_syscall_inotify_add_watch_for_virtual_path() {
+    let agent = TestAgent::start();
+    agent.add_profile("anthropic", "cc", "sk-ant-test", &["--app", "claudeCode"]);
+    agent.use_profile("claudeCode", "cc");
+    let helper = build_raw_inotify_add_watch_helper();
+    let settings_path = temp_app_path(".claude/settings.json");
+    let _ = std::fs::remove_file(&settings_path);
+
+    let output = Command::new(keybearer_bin())
+        .arg("run")
+        .arg(&helper)
+        .arg(&settings_path)
+        .env("SSH_AUTH_SOCK", &agent.ssh_auth_sock)
+        .output()
+        .expect("failed to run direct inotify helper");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(stdout.trim(), "1");
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -1122,6 +1181,73 @@ unsafe fn write_stdout(buf: *const u8, len: usize) {
         .status()
         .expect("run rustc for raw openat helper");
     assert!(status.success(), "raw openat helper should compile");
+
+    binary
+}
+
+#[cfg(target_arch = "x86_64")]
+fn build_raw_inotify_add_watch_helper() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("keybearer-raw-inotify-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create helper dir");
+    let source = dir.join("raw_inotify.rs");
+    let binary = dir.join("raw_inotify");
+
+    std::fs::write(
+        &source,
+        r#"
+use std::arch::asm;
+use std::env;
+use std::ffi::CString;
+
+fn main() {
+    let path = CString::new(env::args().nth(1).expect("path argument")).unwrap();
+    let fd = unsafe { inotify_init1() };
+    if fd < 0 {
+        std::process::exit(1);
+    }
+    let wd = unsafe { inotify_add_watch(fd, path.as_ptr()) };
+    if wd < 0 {
+        std::process::exit(2);
+    }
+    println!("{wd}");
+}
+
+unsafe fn inotify_init1() -> isize {
+    let ret: isize;
+    asm!(
+        "syscall",
+        inlateout("rax") 294isize => ret,
+        in("rdi") 0x80000isize,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    ret
+}
+
+unsafe fn inotify_add_watch(fd: isize, path: *const i8) -> isize {
+    let ret: isize;
+    asm!(
+        "syscall",
+        inlateout("rax") 254isize => ret,
+        in("rdi") fd,
+        in("rsi") path,
+        in("rdx") 0xfffisize,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    ret
+}
+"#,
+    )
+    .expect("write helper source");
+
+    let status = Command::new("rustc")
+        .arg(&source)
+        .arg("-o")
+        .arg(&binary)
+        .status()
+        .expect("run rustc for raw inotify helper");
+    assert!(status.success(), "raw inotify helper should compile");
 
     binary
 }

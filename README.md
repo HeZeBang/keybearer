@@ -150,6 +150,7 @@ keybearer run -- any-command --with-args
 | `~/.codex/config.toml` | Codex | 合并 |
 | `~/.config/opencode/opencode.json` | OpenCode | 合并 |
 | `~/.claude/settings.json` | Claude Code | 合并 |
+| `~/.claude/config.json` | Claude Code | 合并 |
 
 **合并模式**会读取远端已有的配置文件，保留用户自定义内容，仅注入/覆盖 keybearer 管理的字段。
 
