@@ -9,6 +9,8 @@ pub enum AppType {
     Codex,
     #[serde(rename = "opencode", alias = "open-code")]
     OpenCode,
+    #[serde(rename = "claudeCode", alias = "claude-code")]
+    ClaudeCode,
 }
 
 impl AppType {
@@ -16,6 +18,7 @@ impl AppType {
         match self {
             Self::Codex => "codex",
             Self::OpenCode => "opencode",
+            Self::ClaudeCode => "claudeCode",
         }
     }
 
@@ -23,6 +26,7 @@ impl AppType {
         match value {
             "codex" => Some(Self::Codex),
             "opencode" | "open-code" => Some(Self::OpenCode),
+            "claudeCode" | "claude-code" => Some(Self::ClaudeCode),
             _ => None,
         }
     }
@@ -65,6 +69,8 @@ pub struct ProviderApps {
     pub codex: bool,
     #[serde(default, rename = "opencode")]
     pub open_code: bool,
+    #[serde(default, rename = "claudeCode")]
+    pub claude_code: bool,
 }
 
 impl ProviderApps {
@@ -72,6 +78,7 @@ impl ProviderApps {
         match app {
             AppType::Codex => self.codex,
             AppType::OpenCode => self.open_code,
+            AppType::ClaudeCode => self.claude_code,
         }
     }
 
@@ -82,6 +89,9 @@ impl ProviderApps {
         }
         if self.open_code {
             apps.push("opencode");
+        }
+        if self.claude_code {
+            apps.push("claudeCode");
         }
         apps.join(",")
     }
@@ -94,6 +104,7 @@ impl From<Vec<AppType>> for ProviderApps {
             match app {
                 AppType::Codex => provider_apps.codex = true,
                 AppType::OpenCode => provider_apps.open_code = true,
+                AppType::ClaudeCode => provider_apps.claude_code = true,
             }
         }
         provider_apps
@@ -108,6 +119,9 @@ impl From<ProviderApps> for Vec<AppType> {
         }
         if apps.open_code {
             values.push(AppType::OpenCode);
+        }
+        if apps.claude_code {
+            values.push(AppType::ClaudeCode);
         }
         values
     }
@@ -124,10 +138,26 @@ pub struct CodexModelConfig {
     pub models: Vec<String>,
     #[serde(rename = "reasoningEffort", skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    #[serde(
+        rename = "disableResponseStorage",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub disable_response_storage: Option<bool>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
 pub struct OpenCodeModelConfig {
+    #[serde(
+        default,
+        alias = "model",
+        deserialize_with = "deserialize_models",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
+pub struct ClaudeCodeModelConfig {
     #[serde(
         default,
         alias = "model",
@@ -143,6 +173,8 @@ pub struct ProviderModels {
     pub codex: Option<CodexModelConfig>,
     #[serde(rename = "opencode", skip_serializing_if = "Option::is_none")]
     pub open_code: Option<OpenCodeModelConfig>,
+    #[serde(rename = "claudeCode", skip_serializing_if = "Option::is_none")]
+    pub claude_code: Option<ClaudeCodeModelConfig>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]

@@ -4,7 +4,8 @@ mod store;
 mod templates;
 
 use crate::model::{
-    AppType, CodexModelConfig, OpenCodeModelConfig, ProviderApps, ProviderKind, ProviderModels,
+    AppType, ClaudeCodeModelConfig, CodexModelConfig, OpenCodeModelConfig, ProviderApps,
+    ProviderKind, ProviderModels,
     ProviderProfile,
 };
 use libc::{self, c_int, c_ulong};
@@ -624,6 +625,7 @@ fn parse_add_profile(args: &[String]) -> io::Result<(String, ProviderProfile)> {
                 match AppType::parse(&args[index + 1]) {
                     Some(AppType::Codex) => apps.codex = true,
                     Some(AppType::OpenCode) => apps.open_code = true,
+                    Some(AppType::ClaudeCode) => apps.claude_code = true,
                     None => {
                         eprintln!("keybearer: unsupported app: {}", args[index + 1]);
                         std::process::exit(EXIT_USAGE);
@@ -645,7 +647,7 @@ fn parse_add_profile(args: &[String]) -> io::Result<(String, ProviderProfile)> {
             }
             _ => {
                 eprintln!(
-                    "Usage: keybearer add <provider-kind> <profile-id> <api-key> [--name <display-name>] [--base-url <url>] [--app codex] [--app opencode] [--model <model1,model2>]"
+                    "Usage: keybearer add <provider-kind> <profile-id> <api-key> [--name <display-name>] [--base-url <url>] [--app codex] [--app opencode] [--app claudeCode] [--model <model1,model2>]"
                 );
                 std::process::exit(EXIT_USAGE);
             }
@@ -665,12 +667,20 @@ fn parse_add_profile(args: &[String]) -> io::Result<(String, ProviderProfile)> {
             models.codex = Some(CodexModelConfig {
                 models: model_list.clone(),
                 reasoning_effort: None,
+                disable_response_storage: None,
             });
         }
         if apps.open_code {
-            models.open_code = Some(OpenCodeModelConfig { models: model_list });
+            models.open_code = Some(OpenCodeModelConfig {
+                models: model_list.clone(),
+            });
         }
-        if !apps.codex && !apps.open_code {
+        if apps.claude_code {
+            models.claude_code = Some(ClaudeCodeModelConfig {
+                models: model_list.clone(),
+            });
+        }
+        if !apps.codex && !apps.open_code && !apps.claude_code {
             eprintln!("keybearer: warning: --model ignored because no app is enabled");
         }
     }
@@ -719,6 +729,7 @@ fn profile_from_agent_payload(
         match AppType::parse(app) {
             Some(AppType::Codex) => apps.codex = true,
             Some(AppType::OpenCode) => apps.open_code = true,
+            Some(AppType::ClaudeCode) => apps.claude_code = true,
             None => return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid app")),
         }
     }
@@ -728,10 +739,18 @@ fn profile_from_agent_payload(
             models.codex = Some(CodexModelConfig {
                 models: model_list.clone(),
                 reasoning_effort: None,
+                disable_response_storage: None,
             });
         }
         if apps.open_code {
-            models.open_code = Some(OpenCodeModelConfig { models: model_list });
+            models.open_code = Some(OpenCodeModelConfig {
+                models: model_list.clone(),
+            });
+        }
+        if apps.claude_code {
+            models.claude_code = Some(ClaudeCodeModelConfig {
+                models: model_list.clone(),
+            });
         }
     }
     Ok((
@@ -774,6 +793,14 @@ fn send_agent_profile(
             profile
                 .models
                 .open_code
+                .as_ref()
+                .filter(|c| !c.models.is_empty())
+                .map(|c| c.models.join(","))
+        })
+        .or_else(|| {
+            profile
+                .models
+                .claude_code
                 .as_ref()
                 .filter(|c| !c.models.is_empty())
                 .map(|c| c.models.join(","))

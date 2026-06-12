@@ -39,6 +39,13 @@ pub fn app_config_for_path(path: &str) -> Option<AppConfig> {
             mode: AppConfigMode::Merge,
         });
     }
+    if matches_path(path, home.as_ref(), ".claude/settings.json") {
+        return Some(AppConfig {
+            virtual_path: "claude/settings.json",
+            app: AppType::ClaudeCode,
+            mode: AppConfigMode::Merge,
+        });
+    }
     None
 }
 
@@ -56,6 +63,7 @@ pub fn render_app_config(
         }
         "codex/config.toml" => merge_codex_config(credential, remote_base),
         "opencode/opencode.json" => merge_opencode_config(credential, remote_base),
+        "claude/settings.json" => merge_claude_code_config(credential, remote_base),
         _ => None,
     }
 }
@@ -81,15 +89,14 @@ fn merge_codex_config(
             .ok()?,
         None => DocumentMut::new(),
     };
-    let base_url = credential.base_url.as_ref()?;
-    let model = credential.model.as_deref().unwrap_or("gpt-4o");
+    let model = credential.model.as_deref().unwrap_or("gpt-5.5");
     let reasoning_effort = credential.reasoning_effort.as_deref().unwrap_or("high");
     let provider_id = format!("keybearer-{}", credential.profile_id);
 
     doc["model_provider"] = value(&provider_id);
     doc["model"] = value(model);
     doc["model_reasoning_effort"] = value(reasoning_effort);
-    doc["disable_response_storage"] = value(true);
+    doc["disable_response_storage"] = value(credential.disable_response_storage.unwrap_or(true));
 
     if !doc["model_providers"].is_table() {
         doc["model_providers"] = Item::Table(Table::new());
@@ -97,7 +104,9 @@ fn merge_codex_config(
     let provider_table = doc["model_providers"].as_table_mut()?;
     let mut table = Table::new();
     table["name"] = value(&credential.profile_name);
-    table["base_url"] = value(base_url);
+    if let Some(base_url) = &credential.base_url {
+        table["base_url"] = value(base_url);
+    }
     table["wire_api"] = value("responses");
     table["requires_openai_auth"] = value(true);
     provider_table[&provider_id] = Item::Table(table);
@@ -143,6 +152,40 @@ fn merge_opencode_config(
             }
         }),
     );
+
+    serde_json::to_vec(&root).ok()
+}
+
+fn merge_claude_code_config(
+    credential: &CredentialResponse,
+    remote_base: Option<&[u8]>,
+) -> Option<Vec<u8>> {
+    let mut root = match remote_base.filter(|bytes| !bytes.is_empty()) {
+        Some(bytes) => serde_json::from_slice::<Value>(bytes).ok()?,
+        None => json!({}),
+    };
+    let object = root.as_object_mut()?;
+    let env = object
+        .entry("env")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()?;
+
+    env.insert(
+        "ANTHROPIC_AUTH_TOKEN".to_string(),
+        Value::String(credential.api_key.clone()),
+    );
+    if let Some(base_url) = &credential.base_url {
+        env.insert(
+            "ANTHROPIC_BASE_URL".to_string(),
+            Value::String(base_url.clone()),
+        );
+    }
+    if let Some(model) = &credential.model {
+        env.insert(
+            "ANTHROPIC_MODEL".to_string(),
+            Value::String(model.clone()),
+        );
+    }
 
     serde_json::to_vec(&root).ok()
 }

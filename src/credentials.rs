@@ -15,6 +15,8 @@ pub struct CredentialResponse {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_response_storage: Option<bool>,
 }
 
 pub const CREDENTIAL_SCHEMA_VERSION: u32 = 1;
@@ -29,9 +31,20 @@ pub fn credential_for_app(
         None => store.defaults.get(&app)?.as_str(),
     };
     let profile = store.profiles.get(resolved_id)?;
-    if !profile.apps.enables(&app) || !renderer_supports_profile(profile) {
+    if !profile.apps.enables(&app) {
         return None;
     }
+    match app {
+        AppType::Codex | AppType::OpenCode => credential_for_openai_app(app, resolved_id, profile),
+        AppType::ClaudeCode => credential_for_claude_code(resolved_id, profile),
+    }
+}
+
+fn credential_for_openai_app(
+    app: AppType,
+    resolved_id: &str,
+    profile: &ProviderProfile,
+) -> Option<CredentialResponse> {
     let base_url = match profile.provider_kind {
         ProviderKind::OpenAI => Some(
             profile
@@ -57,17 +70,24 @@ pub fn credential_for_app(
             .and_then(|config| config.models.first())
             .cloned()
             .unwrap_or_else(|| "gpt-4o".to_string()),
+        AppType::ClaudeCode => unreachable!(),
     };
+    let codex_config = profile.models.codex.as_ref();
     let reasoning_effort = match app {
         AppType::Codex => Some(
-            profile
-                .models
-                .codex
-                .as_ref()
-                .and_then(|config| config.reasoning_effort.clone())
+            codex_config
+                .and_then(|c| c.reasoning_effort.clone())
                 .unwrap_or_else(|| "high".to_string()),
         ),
-        AppType::OpenCode => None,
+        AppType::OpenCode | AppType::ClaudeCode => None,
+    };
+    let disable_response_storage = match app {
+        AppType::Codex => Some(
+            codex_config
+                .and_then(|c| c.disable_response_storage)
+                .unwrap_or(true),
+        ),
+        AppType::OpenCode | AppType::ClaudeCode => None,
     };
     Some(CredentialResponse {
         schema_version: CREDENTIAL_SCHEMA_VERSION,
@@ -79,12 +99,30 @@ pub fn credential_for_app(
         api_key: profile.api_key.clone(),
         model: Some(model),
         reasoning_effort,
+        disable_response_storage,
     })
 }
 
-fn renderer_supports_profile(profile: &ProviderProfile) -> bool {
-    matches!(
-        profile.provider_kind,
-        ProviderKind::OpenAI | ProviderKind::OpenAICompatible
-    )
+fn credential_for_claude_code(
+    resolved_id: &str,
+    profile: &ProviderProfile,
+) -> Option<CredentialResponse> {
+    let model = profile
+        .models
+        .claude_code
+        .as_ref()
+        .and_then(|c| c.models.first())
+        .cloned();
+    Some(CredentialResponse {
+        schema_version: CREDENTIAL_SCHEMA_VERSION,
+        app: AppType::ClaudeCode,
+        profile_id: resolved_id.to_string(),
+        profile_name: profile.name.clone(),
+        provider_kind: profile.provider_kind.clone(),
+        base_url: profile.base_url.clone(),
+        api_key: profile.api_key.clone(),
+        model,
+        reasoning_effort: None,
+        disable_response_storage: None,
+    })
 }
